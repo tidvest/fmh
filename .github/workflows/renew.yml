@@ -1,0 +1,50 @@
+name: FreeMCHost Renew
+
+on:
+  workflow_dispatch:
+    inputs:
+      headless:
+        description: "是否无头模式运行"
+        required: false
+        default: "true"
+  schedule:
+    # UTC 时间, 每天 02:00 (北京时间 10:00) 跑一次, 按需调整
+    - cron: "0 2 * * *"
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install playwright requests
+          playwright install --with-deps chromium
+
+      - name: Run renew script
+        env:
+          FMC_EMAIL: ${{ secrets.FMC_EMAIL }}
+          FMC_PASSWORD: ${{ secrets.FMC_PASSWORD }}
+          FMC_SERVER_IDS: ${{ secrets.FMC_SERVER_IDS }}
+          WXPUSHER_TOKEN: ${{ secrets.WXPUSHER_TOKEN }}
+          WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
+          WXPUSHER_TOPIC_ID: ${{ secrets.WXPUSHER_TOPIC_ID }}
+          HEADLESS: ${{ github.event.inputs.headless || 'true' }}
+        run: python renew.py
+
+      - name: Upload screenshots (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-artifacts
+          path: |
+            *.png
+          if-no-files-found: ignore
