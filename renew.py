@@ -73,12 +73,70 @@ def wxpusher_send(content: str, summary: str = "FreeMCHost续期通知"):
         log(f"WxPusher 推送失败: {e}")
 
 
+async def fill_and_verify(box, value: str, field_name: str) -> bool:
+    """
+    填入一个输入框, 并校验值是否真的写进去了。
+    如果第一次 fill() 之后读出来的值不对(常见原因: 命中了隐藏的蜜罐字段,
+    或页面框架在 hydration 完成前重置了受控组件的值),
+    就改用模拟真实键盘输入的方式重试一次。
+    返回 True 表示最终确认填入成功, False 表示两次都失败。
+    """
+    await box.click()
+    await box.fill(value)
+    val = await box.input_value()
+    if val == value:
+        return True
+
+    log(f"警告: {field_name} 框填入后值不一致(当前='{val}'), 改用键盘模拟输入重试")
+    await box.click()
+    await box.fill("")
+    await box.type(value, delay=50)
+    val = await box.input_value()
+    if val == value:
+        return True
+
+    log(f"错误: {field_name} 框两次填入均未生效(当前='{val}')")
+    return False
+
+
 async def login(page) -> bool:
     log("打开登录页...")
-    await page.goto(LOGIN_URL, wait_until="domcontentloaded")
+    # 用 networkidle 而不是 domcontentloaded, 尽量等前端框架(若有)完成 hydration,
+    # 减少"填入后被框架内部状态覆盖回空值"的竞态概率
+    try:
+        await page.goto(LOGIN_URL, wait_until="networkidle", timeout=30000)
+    except PWTimeout:
+        await page.goto(LOGIN_URL, wait_until="domcontentloaded")
+
     await page.wait_for_selector("#email", timeout=20000)
-    await page.fill("#email", EMAIL)
-    await page.fill("#password", PASSWORD)
+
+    # 诊断: 记录页面上 #email / #password 各有多少个、是否可见
+    # (常见的反爬手段之一是放一个隐藏的同 id "蜜罐"输入框抓自动化脚本,
+    #  如果数量 > 1, 说明很可能命中了这种情况)
+    email_count = await page.locator("#email").count()
+    pwd_count = await page.locator("#password").count()
+    log(f"诊断: 页面上 #email 数量={email_count}, #password 数量={pwd_count}")
+    if email_count > 1 or pwd_count > 1:
+        log("诊断: 检测到重复 id, 可能存在隐藏蜜罐字段, 将只对可见元素操作")
+
+    email_box = page.locator("#email").first
+    pwd_box = page.locator("#password").first
+
+    # 确保拿到的是真正可见可交互的那个元素, 而不是隐藏的蜜罐
+    await email_box.wait_for(state="visible", timeout=5000)
+    await pwd_box.wait_for(state="visible", timeout=5000)
+
+    email_ok = await fill_and_verify(email_box, EMAIL, "邮箱")
+    pwd_ok = await fill_and_verify(pwd_box, PASSWORD, "密码")
+
+    if not email_ok or not pwd_ok:
+        try:
+            await page.screenshot(path="screenshot_fill_failed.png", full_page=True)
+        except Exception:
+            pass
+        log("登录中止: 邮箱或密码未能成功填入, 不再点击登录按钮")
+        return False
+
     await page.click("button[type=submit]")
     try:
         await page.wait_for_url(f"{BASE_URL}/app**", timeout=20000)
