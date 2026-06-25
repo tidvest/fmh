@@ -371,15 +371,21 @@ def parse_duration_to_seconds(text: str) -> int:
 def is_renew_success(before_text: str, after_text: str) -> bool:
     """
     判断续期是否成功:
-    续期后的剩余秒数应明显大于续期前(差值大于例如1小时), 
-    因为正常倒计时只会自然减少几秒,而成功续期会跳涨一整个周期。
+    续期后的剩余秒数只要比续期前明显增加, 就认为续期成功。
+    注意: 不能用"必须多出至少1小时"这种绝对阈值——
+    如果服务器续期前已经很接近单次续期周期的上限(比如这次续期前就有
+    23H53M, 上限是23H59M52S), 续期后即使生效, 增量也可能只有几分钟,
+    远不到1小时, 之前用 >3600 的写法会把这种"小增量但确实续期成功"的
+    情况误判为失败。
+    真正能区分"成功"和"没生效"的标准其实很简单: 正常倒计时只会随时间
+    自然减少, 所以只要续期后比续期前还要多, 就说明点击生效了; 这里留
+    一点小余量(60秒)防止页面读数的轻微抖动造成误判。
     """
     before_sec = parse_duration_to_seconds(before_text)
     after_sec = parse_duration_to_seconds(after_text)
     if before_sec < 0 or after_sec < 0:
         return False
-    # 续期后比续期前多出至少1小时, 认为续期成功
-    return (after_sec - before_sec) > 3600
+    return (after_sec - before_sec) > 60
 
 
 async def main():
