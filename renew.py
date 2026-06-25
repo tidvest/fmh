@@ -139,14 +139,34 @@ async def login(page) -> bool:
 
     await page.click("button[type=submit]")
     try:
-        await page.wait_for_url(f"{BASE_URL}/app**", timeout=20000)
+        await page.wait_for_url(f"{BASE_URL}/app**", timeout=45000)
     except PWTimeout:
-        log("登录后未跳转到 /app, 可能账号密码错误或触发了验证码")
+        # 跳转超时不代表一定失败: 可能只是这次跳转/网络比较慢,
+        # 这里做个兜底检查——看当前页面是否其实已经是控制台
+        # (用 URL 是否已经变成 /app, 或页面上是否有登录后才会出现的特征元素来判断)
+        already_in_app = False
         try:
-            await page.screenshot(path="screenshot_login_failed.png", full_page=True)
+            if page.url.startswith(f"{BASE_URL}/app"):
+                already_in_app = True
+            else:
+                # 页面上控制台特有的元素, 任一出现就认为已经登录成功
+                dashboard_marker = page.locator(
+                    "text=Sign out, text=Top up, a[href*='/app/servers/']"
+                ).first
+                await dashboard_marker.wait_for(state="visible", timeout=10000)
+                already_in_app = True
         except Exception:
-            pass
-        return False
+            already_in_app = False
+
+        if not already_in_app:
+            log("登录后未跳转到 /app, 可能账号密码错误或触发了验证码")
+            try:
+                await page.screenshot(path="screenshot_login_failed.png", full_page=True)
+            except Exception:
+                pass
+            return False
+
+        log("登录跳转较慢, 但兜底检测确认已进入控制台")
     log("登录成功, 已进入控制台")
     try:
         await page.screenshot(path="screenshot_after_login.png", full_page=True)
