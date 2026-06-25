@@ -257,6 +257,55 @@ async def parse_expiry_block(page) -> str:
         return ""
 
 
+async def dismiss_freshchat(page) -> None:
+    """关闭/清除可能挡住按钮的 Freshchat 客服小窗 (fc-message-root / fc-dialog-overlay)。
+    页面停留久了之后这个小窗会自动弹出, 其 overlay 层会拦截点击事件,
+    导致 Playwright 的 click() 一直判定按钮"不可点击"直至 30s 超时。
+    这里做两层兜底: 1) 尝试点掉小窗的关闭按钮  2) 直接把相关 DOM 节点从页面隐藏掉。
+    """
+    try:
+        # 1) 如果有明显的关闭按钮, 优先正常点掉(更接近真实用户行为)
+        close_btn = page.locator(
+            "[class*='fc-widget'] [aria-label='Close'], "
+            "[class*='fc-widget'] button[class*='close'], "
+            ".fc-message-root [aria-label='Close']"
+        ).first
+        if await close_btn.count() > 0:
+            await close_btn.click(timeout=1500)
+            await page.wait_for_timeout(300)
+    except Exception:
+        pass
+
+    # 2) 兜底: 不管上面有没有关掉, 都直接把遮挡层从 DOM 里隐藏掉
+    #    （这是客服聊天插件, 不影响续期功能, 隐藏它对页面行为没有副作用）
+    try:
+        await page.evaluate(
+            """
+            () => {
+                document.querySelectorAll(
+                    "[class*='fc-widget'], .fc-message-root, .fc-dialog-overlay, [id^='fc_frame']"
+                ).forEach(el => {
+                    el.style.pointerEvents = 'none';
+                    el.style.display = 'none';
+                });
+            }
+            """
+        )
+    except Exception:
+        pass
+
+
+async def safe_click(page, locator, timeout: int = 10000) -> None:
+    """点击前先清理可能存在的 Freshchat 遮挡层, 失败时再用 JS 强制点击兜底。"""
+    await dismiss_freshchat(page)
+    try:
+        await locator.click(timeout=timeout)
+    except PWTimeout:
+        # 常规点击仍超时(说明又被别的东西挡住了), 再清理一次并强制点击
+        await dismiss_freshchat(page)
+        await locator.click(timeout=timeout, force=True)
+
+
 async def renew_one_server(context, server_id: str) -> dict:
     """对单个服务器执行续期, 返回结果字典"""
     page = await context.new_page()
@@ -275,7 +324,7 @@ async def renew_one_server(context, server_id: str) -> dict:
 
         # 点击 Manage 标签
         manage_tab = page.locator("button:has-text('Manage'), [role=tab]:has-text('Manage')").first
-        await manage_tab.click(timeout=10000)
+        await safe_click(page, manage_tab, timeout=10000)
         await page.wait_for_timeout(1500)
 
         before_text = await parse_expiry_block(page)
@@ -306,7 +355,7 @@ async def renew_one_server(context, server_id: str) -> dict:
             await page.close()
             return result
 
-        await renew_btn.click()
+        await safe_click(page, renew_btn, timeout=10000)
         log(f"[{server_id}] 已点击 Renew now, 等待结果...")
 
         # 等待可能出现的确认弹窗(如果有的话, 这里做个宽松兼容)
