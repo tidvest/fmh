@@ -150,8 +150,13 @@ async def login(page) -> bool:
                 already_in_app = True
             else:
                 # 页面上控制台特有的元素, 任一出现就认为已经登录成功
-                dashboard_marker = page.locator(
-                    "text=Sign out, text=Top up, a[href*='/app/servers/']"
+                # 注意: 多个带引擎前缀(text=)的选择器不能直接用逗号拼在一个
+                # locator 字符串里当"或"用, 那样会匹配不到任何东西;
+                # 必须用 Locator.or_() 把几个独立 locator 合并成"满足任一个即可"
+                dashboard_marker = (
+                    page.locator("text=Sign out")
+                    .or_(page.locator("text=Top up"))
+                    .or_(page.locator("a[href*='/app/servers/']"))
                 ).first
                 await dashboard_marker.wait_for(state="visible", timeout=10000)
                 already_in_app = True
